@@ -1,14 +1,18 @@
 import os
 import numpy as np
 import tensorflow as tf
-import streamlit as st
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 from PIL import Image
 
-# Load the pre-trained model
-MODEL_PATH = "skin_disease_detector.h5"  # Ensure this path is correct
+# Initialize Flask app
+app = Flask(__name__)
+
+# Define model path (Update this if your model is stored in a different location)
+MODEL_PATH = r"skin_disease_detector.h5"  # Ensure this path is correct
 model = tf.keras.models.load_model(MODEL_PATH)
 
-# Define disease names
+# Define disease names (Ensure these match your model's output classes)
 diseases = [
     "Acne", "Eczema", "Psoriasis", "Rosacea", "Ringworm",
     "Melanoma", "Vitiligo", "Impetigo", "Urticaria", "Lupus"
@@ -78,40 +82,52 @@ PRECAUTIONS = {
     ]
 }
 
-# Streamlit app layout
-st.title("Skin Disease Detection and Precaution Guide")
-st.write("Upload an image to predict the skin disease and get recommended precautions.")
+# Ensure upload directory exists
+UPLOAD_FOLDER = "uploads"
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-# Image upload section
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+# Allowable image file extensions
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
 
-# Define a function to preprocess the uploaded image
-def preprocess_image(image):
-    img = Image.open(image)
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def preprocess_image(image_path):
+    img = Image.open(image_path)
     img = img.resize((224, 224))  # Ensure this matches your model's input size
     img = np.array(img) / 255.0  # Normalize pixel values
     img = np.expand_dims(img, axis=0)  # Add batch dimension
     return img
 
-# Predict function
-def predict_image(image):
-    img = preprocess_image(image)
-    prediction = model.predict(img)
-    predicted_class = np.argmax(prediction)
+@app.route("/predict", methods=["POST"])
+def predict():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    
+    if file.filename == "" or not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type"}), 400
+
+    filename = secure_filename(file.filename)
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(file_path)
+
+    # Preprocess image and predict
+    img = preprocess_image(file_path)
+    predictions = model.predict(img)
+    predicted_class = np.argmax(predictions)
+
     disease_name = diseases[predicted_class]
-    precautions = PRECAUTIONS.get(disease_name, "No specific precautions available.")
-    return disease_name, precautions
+    precaution = precautions.get(disease_name, "No specific precautions available.")
 
-# Display the uploaded image and prediction results
-if uploaded_file is not None:
-    # Show the uploaded image
-    img = Image.open(uploaded_file)
-    st.image(img, caption="Uploaded Image", use_column_width=True)
+    result = {
+        "disease": disease_name,
+        "precautions": precaution
+    }
 
-    # Predict and display results
-    disease, precautions = predict_image(uploaded_file)
-    st.subheader(f"Predicted Disease: {disease}")
-    st.write("**Precautions:**")
-    for precaution in precautions:
-        st.write(f"- {precaution}")
+    return jsonify(result)
 
+if __name__ == "__main__":
+    app.run(debug=True)
